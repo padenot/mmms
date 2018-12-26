@@ -1,6 +1,6 @@
 # `mmms`
 
-**M**onome **M**onophonic **M**elody **M**equencer.
+**M**onophonic **M**onome **M**elody **M**equencer.
 
 Code intended to run on a [bela](https://bela.io), to sequence pitched
 instruments, triggered using gates. Sequencing is done on a [monome
