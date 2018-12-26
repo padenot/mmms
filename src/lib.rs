@@ -6,10 +6,10 @@ extern crate monome;
 extern crate smallvec;
 
 use std::cmp;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::{thread, time};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::{thread, time};
 
 use audio_clock::*;
 use bela::*;
@@ -55,7 +55,7 @@ impl MMMSRenderer {
         }
     }
     fn press(&mut self, x: usize, pitch: usize) {
-      // ...
+        // ...
     }
     fn set_tempo(&mut self, new_tempo: f32) {
         self.tempo = new_tempo;
@@ -237,30 +237,26 @@ impl InstrumentControl for MMMS {
         }
 
         // draw notes
-        // for i in 
+        // for i in
     }
     fn main_thread_work(&mut self) {
         // noop
     }
     fn input(&mut self, event: MonomeEvent) {
         match event {
-            MonomeEvent::GridKey { x, y, direction } => {
-                match direction {
-                    KeyDirection::Down => {
-                        self.state_tracker.down(x as usize, y as usize);
-                    }
-                    KeyDirection::Up => {
-                        match self.state_tracker.up(x as usize, y as usize) {
-                            MMMSAction::Tick((x, y)) => {
-                                println!("tick");
-                            }
-                            _ => {
-                                println!("nothing");
-                            }
-                        }
-                    }
+            MonomeEvent::GridKey { x, y, direction } => match direction {
+                KeyDirection::Down => {
+                    self.state_tracker.down(x as usize, y as usize);
                 }
-            }
+                KeyDirection::Up => match self.state_tracker.up(x as usize, y as usize) {
+                    MMMSAction::Tick((x, y)) => {
+                        println!("tick");
+                    }
+                    _ => {
+                        println!("nothing");
+                    }
+                },
+            },
             _ => {}
         }
     }
@@ -268,7 +264,13 @@ impl InstrumentControl for MMMS {
 
 #[derive(Debug, Clone)]
 enum PitchClass {
-    A, B, C, D, E, F, G
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
 }
 
 impl PartialEq for Pitch {
@@ -281,46 +283,47 @@ impl PitchClass {
     // todo: replace with real try_from when it's stable
     fn try_from(c: char) -> Result<Self, ()> {
         match c {
-            'A'|'a' => Ok(PitchClass::A),
-            'B'|'b' => Ok(PitchClass::B),
-            'C'|'c' => Ok(PitchClass::C),
-            'D'|'d' => Ok(PitchClass::D),
-            'E'|'e' => Ok(PitchClass::E),
-            'F'|'f' => Ok(PitchClass::F),
-            'G'|'g' => Ok(PitchClass::G),
-            _ => Err(())
+            'A' | 'a' => Ok(PitchClass::A),
+            'B' | 'b' => Ok(PitchClass::B),
+            'C' | 'c' => Ok(PitchClass::C),
+            'D' | 'd' => Ok(PitchClass::D),
+            'E' | 'e' => Ok(PitchClass::E),
+            'F' | 'f' => Ok(PitchClass::F),
+            'G' | 'g' => Ok(PitchClass::G),
+            _ => Err(()),
         }
     }
     fn from_MIDI_note(midi_note: u8) -> Self {
         match midi_note % 12 {
-            0  => PitchClass::C,
-            1  => PitchClass::C,
-            2  => PitchClass::D,
-            3  => PitchClass::D,
-            4  => PitchClass::E,
-            5  => PitchClass::F,
-            6  => PitchClass::F,
-            7  => PitchClass::G,
-            8  => PitchClass::G,
-            9  => PitchClass::A,
+            0 => PitchClass::C,
+            1 => PitchClass::C,
+            2 => PitchClass::D,
+            3 => PitchClass::D,
+            4 => PitchClass::E,
+            5 => PitchClass::F,
+            6 => PitchClass::F,
+            7 => PitchClass::G,
+            8 => PitchClass::G,
+            9 => PitchClass::A,
             10 => PitchClass::A,
             11 => PitchClass::B,
-            _ => { PitchClass::A /* ?? */ }
+            _ => {
+                PitchClass::A /* ?? */
+            }
         }
     }
     fn semitone_offset(&self) -> i8 {
         match self {
-            PitchClass::C => { 0 }
-            PitchClass::D => { 2 }
-            PitchClass::E => { 4 }
-            PitchClass::F => { 5 }
-            PitchClass::G => { 7 }
-            PitchClass::A => { 9 }
-            PitchClass::B => { 11 }
+            PitchClass::C => 0,
+            PitchClass::D => 2,
+            PitchClass::E => 4,
+            PitchClass::F => 5,
+            PitchClass::G => 7,
+            PitchClass::A => 9,
+            PitchClass::B => 11,
         }
     }
 }
-
 
 impl fmt::Display for PitchClass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -332,17 +335,17 @@ impl fmt::Display for PitchClass {
 enum Accidental {
     Flat,
     Natural,
-    Sharp
+    Sharp,
 }
 
 impl Accidental {
     // todo: replace with real try_from when it's stable
     fn try_from(c: char) -> Result<Self, ()> {
         match c {
-            'b'|'♭' => Ok(Accidental::Flat),
+            'b' | '♭' => Ok(Accidental::Flat),
             '♮' => Ok(Accidental::Natural),
-            '#'|'♯' => Ok(Accidental::Sharp),
-            _ => Err(())
+            '#' | '♯' => Ok(Accidental::Sharp),
+            _ => Err(()),
         }
     }
     fn try_from_semitone_offset(offset: i8) -> Result<Self, ()> {
@@ -350,14 +353,14 @@ impl Accidental {
             -1 => Ok(Accidental::Flat),
             0 => Ok(Accidental::Natural),
             1 => Ok(Accidental::Sharp),
-            _ => Err(())
+            _ => Err(()),
         }
     }
     fn semitone_offset(&self) -> i8 {
         match self {
-            Accidental::Flat => { -1 }
-            Accidental::Natural => { 0 }
-            Accidental::Sharp => { 1 }
+            Accidental::Flat => -1,
+            Accidental::Natural => 0,
+            Accidental::Sharp => 1,
         }
     }
 }
@@ -387,72 +390,71 @@ impl fmt::Display for Pitch {
 }
 
 impl Pitch {
-    fn try_from(string: &str) -> Result<Pitch,()> {
+    fn try_from(string: &str) -> Result<Pitch, ()> {
         Self::parse(string)
     }
     fn from_MIDI_note(midi_note: u8) -> Pitch {
         let midi_note_ext = midi_note as i16;
         let octave = (midi_note_ext / 12 - 1) as i8;
         let pitch_class = PitchClass::from_MIDI_note(midi_note);
-        let remaining = (midi_note as u8 - (((octave + 1) * 12) + pitch_class.semitone_offset()) as u8) as i8;
+        let remaining =
+            (midi_note as u8 - (((octave + 1) * 12) + pitch_class.semitone_offset()) as u8) as i8;
         let accidental = Accidental::try_from_semitone_offset(remaining).unwrap();
         return Pitch {
             octave,
             pitch_class,
-            accidental
-        }
+            accidental,
+        };
     }
     fn new(pitch_class: PitchClass, accidental: Accidental, octave: i8) -> Pitch {
         Pitch {
             pitch_class,
             accidental,
-            octave
+            octave,
         }
     }
     /// Parse a string representation into a pitch. Weird notation are accepted, such as "B#4" or
     /// "A♮4"
-    fn parse(string: &str) -> Result<Pitch,()> {
-      if string.chars().count() < 2 || string.chars().count() > 3 {
-          return Err(());
-      }
+    fn parse(string: &str) -> Result<Pitch, ()> {
+        if string.chars().count() < 2 || string.chars().count() > 3 {
+            return Err(());
+        }
 
-      let mut it = string.char_indices().peekable();
+        let mut it = string.char_indices().peekable();
 
-      let pitch_class = PitchClass::try_from(it.next().unwrap().1)?;
-      // accidental is not mandatory, if it's not present it's natural
-      let maybe_accidental = it.peek().unwrap().1;
-      let accidental = match Accidental::try_from(maybe_accidental) {
-          Ok(a) => {
-              it.next();
-              a
-          }
-          _ => {
-              Accidental::Natural
-          }
-      };
-      let (idx, char) = it.next().unwrap();
-      let (begin, octave_string) = string.split_at(idx);
-      let maybe_octave = octave_string.parse::<i8>();
-      let octave = match maybe_octave {
-          Ok(o) => {
-              o
-          }
-          _ => {
-              return Err(());
-          }
-      };
+        let pitch_class = PitchClass::try_from(it.next().unwrap().1)?;
+        // accidental is not mandatory, if it's not present it's natural
+        let maybe_accidental = it.peek().unwrap().1;
+        let accidental = match Accidental::try_from(maybe_accidental) {
+            Ok(a) => {
+                it.next();
+                a
+            }
+            _ => Accidental::Natural,
+        };
+        let (idx, char) = it.next().unwrap();
+        let (begin, octave_string) = string.split_at(idx);
+        let maybe_octave = octave_string.parse::<i8>();
+        let octave = match maybe_octave {
+            Ok(o) => o,
+            _ => {
+                return Err(());
+            }
+        };
 
-      Ok(Pitch {
-          pitch_class,
-          accidental,
-          octave
-      })
+        Ok(Pitch {
+            pitch_class,
+            accidental,
+            octave,
+        })
     }
     /// Returns a number of Volts for this note, to control the pitch via a control voltage (CV).
     /// This is fairly arbitrary, apart from the fact that one volt is one octave. This system
     /// considers that C0 is 0V.
     fn to_CV(&self) -> f32 {
-      (self.octave as f32) + ((self.pitch_class.semitone_offset() + self.accidental.semitone_offset()) as f32 / 12.)
+        (self.octave as f32)
+            + ((self.pitch_class.semitone_offset() + self.accidental.semitone_offset()) as f32
+                / 12.)
     }
     /// Returns the pitch of this note in Hertz
     fn to_Hz(&self) -> f32 {
@@ -461,39 +463,34 @@ impl Pitch {
     /// Returns a MIDI note number, from the Scientific Pitch Notation
     /// <https://en.wikipedia.org/wiki/Scientific_pitch_notation>
     fn to_MIDI(&self) -> u8 {
-      let base_octave = (self.octave + 1) * 12;
-      let offset = self.pitch_class.semitone_offset();
-      let accidental = self.accidental.semitone_offset();
-      return (base_octave + offset + accidental) as u8;
+        let base_octave = (self.octave + 1) * 12;
+        let offset = self.pitch_class.semitone_offset();
+        let accidental = self.accidental.semitone_offset();
+        return (base_octave + offset + accidental) as u8;
     }
 }
 
-
 #[derive(Debug, Clone)]
 struct Note {
-  pitch: Pitch,
-  // steps for now, handle triplets and such later...
-  duration: u8
+    pitch: Pitch,
+    // steps for now, handle triplets and such later...
+    duration: u8,
 }
 
 struct Sequence {
-    steps: SmallVec::<[Option<Note>; 64]>
+    steps: SmallVec<[Option<Note>; 64]>,
 }
 
 impl Sequence {
-    fn new() -> Sequence
-    {
-       let mut steps = SmallVec::<[Option<Note>; 64]>::new();
-       steps.resize(16, None);
-       Sequence {
-           steps,
-       }
+    fn new() -> Sequence {
+        let mut steps = SmallVec::<[Option<Note>; 64]>::new();
+        steps.resize(16, None);
+        Sequence { steps }
     }
     fn resize(&mut self, new_size: usize) {
         self.steps.resize(new_size, None);
     }
-    fn press(&mut self, x: usize, note: Note) {
-    }
+    fn press(&mut self, x: usize, note: Note) {}
 }
 
 #[cfg(test)]
@@ -508,7 +505,14 @@ mod tests {
         for i in 0..notes.len() {
             let note = Pitch::try_from(notes[i]).unwrap();
             let note_from_midi = Pitch::from_MIDI_note(midi[i]);
-            println!("{} {} {} {} {}",note, note.to_MIDI(), note.to_CV(), note.to_Hz(), note_from_midi);
+            println!(
+                "{} {} {} {} {}",
+                note,
+                note.to_MIDI(),
+                note.to_CV(),
+                note.to_Hz(),
+                note_from_midi
+            );
             assert!(note == note_from_midi);
             assert!(note.to_MIDI() == midi[i]);
             assert!((note.to_Hz() - Hz[i]).abs() < 0.01);
