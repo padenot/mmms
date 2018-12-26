@@ -8,6 +8,8 @@ extern crate smallvec;
 use std::cmp;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::{thread, time};
+use std::fmt;
+use std::str::FromStr;
 
 use audio_clock::*;
 use bela::*;
@@ -234,7 +236,8 @@ impl InstrumentControl for MMMS {
             grid[i * self.width + pos_in_pattern] = 4;
         }
 
-        // ...
+        // draw notes
+        // for i in 
     }
     fn main_thread_work(&mut self) {
         // noop
@@ -259,6 +262,217 @@ impl InstrumentControl for MMMS {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PitchClass {
+    A, B, C, D, E, F, G
+}
+
+impl PitchClass {
+    // todo: replace with real try_from when it's stable
+    fn try_from(c: char) -> Result<Self, ()> {
+        match c {
+            'A'|'a' => Ok(PitchClass::A),
+            'B'|'b' => Ok(PitchClass::B),
+            'C'|'c' => Ok(PitchClass::C),
+            'D'|'d' => Ok(PitchClass::D),
+            'E'|'e' => Ok(PitchClass::E),
+            'F'|'f' => Ok(PitchClass::F),
+            'G'|'g' => Ok(PitchClass::G),
+            _ => Err(())
+        }
+    }
+}
+
+
+impl fmt::Display for PitchClass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Accidental {
+    Flat,
+    Natural,
+    Sharp
+}
+
+impl Accidental {
+    // todo: replace with real try_from when it's stable
+    fn try_from(c: char) -> Result<Self, ()> {
+        match c {
+            'b'|'♭' => Ok(Accidental::Flat),
+            '♮' => Ok(Accidental::Natural),
+            '#'|'♯' => Ok(Accidental::Sharp),
+            _ => Err(())
+        }
+    }
+}
+
+impl fmt::Display for Accidental {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let symbol = match self {
+            Accidental::Flat => "♭",
+            Accidental::Natural => "",
+            Accidental::Sharp => "♯",
+        };
+        write!(f, "{}", symbol)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Pitch {
+    pitch_class: PitchClass,
+    accidental: Accidental,
+    octave: i8,
+}
+
+impl fmt::Display for Pitch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}{}{}", self.pitch_class, self.accidental, self.octave)
+    }
+}
+
+impl Pitch {
+    fn try_from(string: &str) -> Result<Pitch,()> {
+        Self::parse(string)
+    }
+    fn new(pitch_class: PitchClass, accidental: Accidental, octave: i8) -> Pitch {
+        Pitch {
+            pitch_class,
+            accidental,
+            octave
+        }
+    }
+    /// Parse a string representation into a pitch. Weird notation are accepted, such as "B#4" or
+    /// "A♮4"
+    fn parse(string: &str) -> Result<Pitch,()> {
+      if string.chars().count() < 2 || string.chars().count() > 3 {
+          return Err(());
+      }
+
+      let mut it = string.char_indices().peekable();
+
+      let pitch_class = PitchClass::try_from(it.next().unwrap().1)?;
+      // accidental is not mandatory, if it's not present it's natural
+      let maybe_accidental = it.peek().unwrap().1;
+      let accidental = match Accidental::try_from(maybe_accidental) {
+          Ok(a) => {
+              it.next();
+              a
+          }
+          _ => {
+              Accidental::Natural
+          }
+      };
+      let (idx, char) = it.next().unwrap();
+      let (begin, octave_string) = string.split_at(idx);
+      let maybe_octave = octave_string.parse::<i8>();
+      let octave = match maybe_octave {
+          Ok(o) => {
+              o
+          }
+          _ => {
+              return Err(());
+          }
+      };
+
+      Ok(Pitch {
+          pitch_class,
+          accidental,
+          octave
+      })
+    }
+    /// Returns a number of Volts for this note, to control the pitch via a control voltage (CV).
+    /// This is fairly arbitrary, apart from the fact that one volt is one octave. This system
+    /// considers that C0 is 0V.
+    fn to_CV(&self) -> f32 {
+      (self.octave as f32) + ((self.semitone_offset() + self.accidental_offset()) as f32 / 12.)
+    }
+    /// Returns the pitch of this note in Hertz
+    fn to_Hz(&self) -> f32 {
+        440. * (2. as f32).powf(((self.to_MIDI() as f32) - 69.) / 12.)
+    }
+    /// Number of semitones from the base C for this note
+    fn semitone_offset(&self) -> i8 {
+        match self.pitch_class {
+            PitchClass::A => { 9 }
+            PitchClass::B => { 11 }
+            PitchClass::C => { 0 }
+            PitchClass::D => { 2 }
+            PitchClass::E => { 4 }
+            PitchClass::F => { 5 }
+            PitchClass::G => { 7 }
+        }
+    }
+    /// -1, 0 or 1, depending, for this note, based on which accidental it has
+    fn accidental_offset(&self) -> i8 {
+        match self.accidental {
+            Accidental::Flat => { -1 }
+            Accidental::Natural => { 0 }
+            Accidental::Sharp => { 1 }
+        }
+    }
+    /// Returns a MIDI note number, from the Scientific Pitch Notation
+    /// <https://en.wikipedia.org/wiki/Scientific_pitch_notation>
+    fn to_MIDI(&self) -> i8 {
+      let base_octave = (self.octave + 1) * 12;
+      let offset = self.semitone_offset();
+      let accidental = self.accidental_offset();
+      return base_octave + offset + accidental;
+    }
+}
+
+
+#[derive(Debug, Clone)]
+struct Note {
+  pitch: Pitch,
+  // steps for now, handle triplets and such later...
+  duration: u8
+}
+
+struct Sequence {
+    steps: SmallVec::<[Option<Note>; 64]>
+}
+
+impl Sequence {
+    fn new() -> Sequence
+    {
+       let mut steps = SmallVec::<[Option<Note>; 64]>::new();
+       steps.resize(16, None);
+       Sequence {
+           steps,
+       }
+    }
+    fn resize(&mut self, new_size: usize) {
+        self.steps.resize(new_size, None);
+    }
+    fn press(&mut self, x: usize, y: Note) {
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use Pitch;
+
+    #[test]
+    fn it_works() {
+        let notes = ["a4", "A4", "C-1", "Cb1", "F#3", "B♮1"];
+        let midi = [69, 69, 0, 23, 54, 35];
+        let Hz = [440., 440., 8.1758, 30.868, 185.00, 61.735];
+        for i in 0..notes.len() {
+            let note = Pitch::try_from(notes[i]).unwrap();
+            println!("{} {} {} {}",note, note.to_MIDI(), note.to_CV(), note.to_Hz());
+            assert!(note.to_MIDI() == midi[i]);
+            assert!((note.to_Hz() - Hz[i]).abs() < 0.01);
+        }
+        let bad_notes = ["i4", "4a", "C&1", "asdasdasd", "#A4", "♮♮♮"];
+        for i in 0..notes.len() {
+            assert!(Pitch::try_from(bad_notes[i]).is_err());
         }
     }
 }
