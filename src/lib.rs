@@ -271,6 +271,12 @@ enum PitchClass {
     A, B, C, D, E, F, G
 }
 
+impl PartialEq for Pitch {
+    fn eq(&self, other: &Pitch) -> bool {
+        self.to_MIDI() == other.to_MIDI()
+    }
+}
+
 impl PitchClass {
     // todo: replace with real try_from when it's stable
     fn try_from(c: char) -> Result<Self, ()> {
@@ -283,6 +289,34 @@ impl PitchClass {
             'F'|'f' => Ok(PitchClass::F),
             'G'|'g' => Ok(PitchClass::G),
             _ => Err(())
+        }
+    }
+    fn from_MIDI_note(midi_note: u8) -> Self {
+        match midi_note % 12 {
+            0  => PitchClass::C,
+            1  => PitchClass::C,
+            2  => PitchClass::D,
+            3  => PitchClass::D,
+            4  => PitchClass::E,
+            5  => PitchClass::F,
+            6  => PitchClass::F,
+            7  => PitchClass::G,
+            8  => PitchClass::G,
+            9  => PitchClass::A,
+            10 => PitchClass::A,
+            11 => PitchClass::B,
+            _ => { PitchClass::A /* ?? */ }
+        }
+    }
+    fn semitone_offset(&self) -> i8 {
+        match self {
+            PitchClass::C => { 0 }
+            PitchClass::D => { 2 }
+            PitchClass::E => { 4 }
+            PitchClass::F => { 5 }
+            PitchClass::G => { 7 }
+            PitchClass::A => { 9 }
+            PitchClass::B => { 11 }
         }
     }
 }
@@ -309,6 +343,21 @@ impl Accidental {
             '♮' => Ok(Accidental::Natural),
             '#'|'♯' => Ok(Accidental::Sharp),
             _ => Err(())
+        }
+    }
+    fn try_from_semitone_offset(offset: i8) -> Result<Self, ()> {
+        match offset {
+            -1 => Ok(Accidental::Flat),
+            0 => Ok(Accidental::Natural),
+            1 => Ok(Accidental::Sharp),
+            _ => Err(())
+        }
+    }
+    fn semitone_offset(&self) -> i8 {
+        match self {
+            Accidental::Flat => { -1 }
+            Accidental::Natural => { 0 }
+            Accidental::Sharp => { 1 }
         }
     }
 }
@@ -340,6 +389,18 @@ impl fmt::Display for Pitch {
 impl Pitch {
     fn try_from(string: &str) -> Result<Pitch,()> {
         Self::parse(string)
+    }
+    fn from_MIDI_note(midi_note: u8) -> Pitch {
+        let midi_note_ext = midi_note as i16;
+        let octave = (midi_note_ext / 12 - 1) as i8;
+        let pitch_class = PitchClass::from_MIDI_note(midi_note);
+        let remaining = (midi_note as u8 - (((octave + 1) * 12) + pitch_class.semitone_offset()) as u8) as i8;
+        let accidental = Accidental::try_from_semitone_offset(remaining).unwrap();
+        return Pitch {
+            octave,
+            pitch_class,
+            accidental
+        }
     }
     fn new(pitch_class: PitchClass, accidental: Accidental, octave: i8) -> Pitch {
         Pitch {
@@ -391,39 +452,19 @@ impl Pitch {
     /// This is fairly arbitrary, apart from the fact that one volt is one octave. This system
     /// considers that C0 is 0V.
     fn to_CV(&self) -> f32 {
-      (self.octave as f32) + ((self.semitone_offset() + self.accidental_offset()) as f32 / 12.)
+      (self.octave as f32) + ((self.pitch_class.semitone_offset() + self.accidental.semitone_offset()) as f32 / 12.)
     }
     /// Returns the pitch of this note in Hertz
     fn to_Hz(&self) -> f32 {
         440. * (2. as f32).powf(((self.to_MIDI() as f32) - 69.) / 12.)
     }
-    /// Number of semitones from the base C for this note
-    fn semitone_offset(&self) -> i8 {
-        match self.pitch_class {
-            PitchClass::A => { 9 }
-            PitchClass::B => { 11 }
-            PitchClass::C => { 0 }
-            PitchClass::D => { 2 }
-            PitchClass::E => { 4 }
-            PitchClass::F => { 5 }
-            PitchClass::G => { 7 }
-        }
-    }
-    /// -1, 0 or 1, depending, for this note, based on which accidental it has
-    fn accidental_offset(&self) -> i8 {
-        match self.accidental {
-            Accidental::Flat => { -1 }
-            Accidental::Natural => { 0 }
-            Accidental::Sharp => { 1 }
-        }
-    }
     /// Returns a MIDI note number, from the Scientific Pitch Notation
     /// <https://en.wikipedia.org/wiki/Scientific_pitch_notation>
-    fn to_MIDI(&self) -> i8 {
+    fn to_MIDI(&self) -> u8 {
       let base_octave = (self.octave + 1) * 12;
-      let offset = self.semitone_offset();
-      let accidental = self.accidental_offset();
-      return base_octave + offset + accidental;
+      let offset = self.pitch_class.semitone_offset();
+      let accidental = self.accidental.semitone_offset();
+      return (base_octave + offset + accidental) as u8;
     }
 }
 
@@ -451,7 +492,7 @@ impl Sequence {
     fn resize(&mut self, new_size: usize) {
         self.steps.resize(new_size, None);
     }
-    fn press(&mut self, x: usize, y: Note) {
+    fn press(&mut self, x: usize, note: Note) {
     }
 }
 
@@ -466,7 +507,9 @@ mod tests {
         let Hz = [440., 440., 8.1758, 30.868, 185.00, 61.735];
         for i in 0..notes.len() {
             let note = Pitch::try_from(notes[i]).unwrap();
-            println!("{} {} {} {}",note, note.to_MIDI(), note.to_CV(), note.to_Hz());
+            let note_from_midi = Pitch::from_MIDI_note(midi[i]);
+            println!("{} {} {} {} {}",note, note.to_MIDI(), note.to_CV(), note.to_Hz(), note_from_midi);
+            assert!(note == note_from_midi);
             assert!(note.to_MIDI() == midi[i]);
             assert!((note.to_Hz() - Hz[i]).abs() < 0.01);
         }
