@@ -19,3 +19,6 @@ path = "../bela-rs/"
 [dependencies.mbms-traits]
 path ="../mbms-traits/"
 
+[dependencies.musical_scales]
+path ="../musical_scales"
+

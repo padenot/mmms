@@ -4,6 +4,7 @@ extern crate euclidian_rythms;
 extern crate mbms_traits;
 extern crate monome;
 extern crate smallvec;
+extern crate musical_scales;
 
 use std::cmp;
 use std::fmt;
@@ -12,11 +13,17 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::{thread, time};
 
 use audio_clock::*;
+use musical_scales::*;
 use bela::*;
 use euclidian_rythms::*;
 use mbms_traits::*;
 use monome::{KeyDirection, MonomeEvent};
 use smallvec::SmallVec;
+
+/// Maximum number of steps in the sequencer, in sixteenth.
+const MAX_STEPS: usize = 64;
+/// Number of notes that can be represented, in semitones.
+const MAX_NOTES: usize = 128;
 
 #[derive(Debug)]
 enum Message {
@@ -263,263 +270,63 @@ impl InstrumentControl for MMMS {
 }
 
 #[derive(Debug, Clone)]
-enum PitchClass {
-    A,
-    B,
-    C,
-    D,
-    E,
-    F,
-    G,
-}
-
-impl PartialEq for Pitch {
-    fn eq(&self, other: &Pitch) -> bool {
-        self.to_MIDI() == other.to_MIDI()
-    }
-}
-
-impl PitchClass {
-    // todo: replace with real try_from when it's stable
-    fn try_from(c: char) -> Result<Self, ()> {
-        match c {
-            'A' | 'a' => Ok(PitchClass::A),
-            'B' | 'b' => Ok(PitchClass::B),
-            'C' | 'c' => Ok(PitchClass::C),
-            'D' | 'd' => Ok(PitchClass::D),
-            'E' | 'e' => Ok(PitchClass::E),
-            'F' | 'f' => Ok(PitchClass::F),
-            'G' | 'g' => Ok(PitchClass::G),
-            _ => Err(()),
-        }
-    }
-    fn from_MIDI_note(midi_note: u8) -> Self {
-        match midi_note % 12 {
-            0 => PitchClass::C,
-            1 => PitchClass::C,
-            2 => PitchClass::D,
-            3 => PitchClass::D,
-            4 => PitchClass::E,
-            5 => PitchClass::F,
-            6 => PitchClass::F,
-            7 => PitchClass::G,
-            8 => PitchClass::G,
-            9 => PitchClass::A,
-            10 => PitchClass::A,
-            11 => PitchClass::B,
-            _ => {
-                PitchClass::A /* ?? */
-            }
-        }
-    }
-    fn semitone_offset(&self) -> i8 {
-        match self {
-            PitchClass::C => 0,
-            PitchClass::D => 2,
-            PitchClass::E => 4,
-            PitchClass::F => 5,
-            PitchClass::G => 7,
-            PitchClass::A => 9,
-            PitchClass::B => 11,
-        }
-    }
-}
-
-impl fmt::Display for PitchClass {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-#[derive(Debug, Clone)]
-enum Accidental {
-    Flat,
-    Natural,
-    Sharp,
-}
-
-impl Accidental {
-    // todo: replace with real try_from when it's stable
-    fn try_from(c: char) -> Result<Self, ()> {
-        match c {
-            'b' | '♭' => Ok(Accidental::Flat),
-            '♮' => Ok(Accidental::Natural),
-            '#' | '♯' => Ok(Accidental::Sharp),
-            _ => Err(()),
-        }
-    }
-    fn try_from_semitone_offset(offset: i8) -> Result<Self, ()> {
-        match offset {
-            -1 => Ok(Accidental::Flat),
-            0 => Ok(Accidental::Natural),
-            1 => Ok(Accidental::Sharp),
-            _ => Err(()),
-        }
-    }
-    fn semitone_offset(&self) -> i8 {
-        match self {
-            Accidental::Flat => -1,
-            Accidental::Natural => 0,
-            Accidental::Sharp => 1,
-        }
-    }
-}
-
-impl fmt::Display for Accidental {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let symbol = match self {
-            Accidental::Flat => "♭",
-            Accidental::Natural => "",
-            Accidental::Sharp => "♯",
-        };
-        write!(f, "{}", symbol)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Pitch {
-    pitch_class: PitchClass,
-    accidental: Accidental,
-    octave: i8,
-}
-
-impl fmt::Display for Pitch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}{}", self.pitch_class, self.accidental, self.octave)
-    }
-}
-
-impl Pitch {
-    fn try_from(string: &str) -> Result<Pitch, ()> {
-        Self::parse(string)
-    }
-    fn from_MIDI_note(midi_note: u8) -> Pitch {
-        let midi_note_ext = midi_note as i16;
-        let octave = (midi_note_ext / 12 - 1) as i8;
-        let pitch_class = PitchClass::from_MIDI_note(midi_note);
-        let remaining =
-            (midi_note as u8 - (((octave + 1) * 12) + pitch_class.semitone_offset()) as u8) as i8;
-        let accidental = Accidental::try_from_semitone_offset(remaining).unwrap();
-        return Pitch {
-            octave,
-            pitch_class,
-            accidental,
-        };
-    }
-    fn new(pitch_class: PitchClass, accidental: Accidental, octave: i8) -> Pitch {
-        Pitch {
-            pitch_class,
-            accidental,
-            octave,
-        }
-    }
-    /// Parse a string representation into a pitch. Weird notation are accepted, such as "B#4" or
-    /// "A♮4"
-    fn parse(string: &str) -> Result<Pitch, ()> {
-        if string.chars().count() < 2 || string.chars().count() > 3 {
-            return Err(());
-        }
-
-        let mut it = string.char_indices().peekable();
-
-        let pitch_class = PitchClass::try_from(it.next().unwrap().1)?;
-        // accidental is not mandatory, if it's not present it's natural
-        let maybe_accidental = it.peek().unwrap().1;
-        let accidental = match Accidental::try_from(maybe_accidental) {
-            Ok(a) => {
-                it.next();
-                a
-            }
-            _ => Accidental::Natural,
-        };
-        let (idx, char) = it.next().unwrap();
-        let (begin, octave_string) = string.split_at(idx);
-        let maybe_octave = octave_string.parse::<i8>();
-        let octave = match maybe_octave {
-            Ok(o) => o,
-            _ => {
-                return Err(());
-            }
-        };
-
-        Ok(Pitch {
-            pitch_class,
-            accidental,
-            octave,
-        })
-    }
-    /// Returns a number of Volts for this note, to control the pitch via a control voltage (CV).
-    /// This is fairly arbitrary, apart from the fact that one volt is one octave. This system
-    /// considers that C0 is 0V.
-    fn to_CV(&self) -> f32 {
-        (self.octave as f32)
-            + ((self.pitch_class.semitone_offset() + self.accidental.semitone_offset()) as f32
-                / 12.)
-    }
-    /// Returns the pitch of this note in Hertz
-    fn to_Hz(&self) -> f32 {
-        440. * (2. as f32).powf(((self.to_MIDI() as f32) - 69.) / 12.)
-    }
-    /// Returns a MIDI note number, from the Scientific Pitch Notation
-    /// <https://en.wikipedia.org/wiki/Scientific_pitch_notation>
-    fn to_MIDI(&self) -> u8 {
-        let base_octave = (self.octave + 1) * 12;
-        let offset = self.pitch_class.semitone_offset();
-        let accidental = self.accidental.semitone_offset();
-        return (base_octave + offset + accidental) as u8;
-    }
-}
-
-#[derive(Debug, Clone)]
 struct Note {
     pitch: Pitch,
-    // steps for now, handle triplets and such later...
+    // steps for now, handle triplets and such later... Maybe always 1?
     duration: u8,
 }
 
 struct Sequence {
     steps: SmallVec<[Option<Note>; 64]>,
+    begin: usize,
+    end: usize,
 }
 
 impl Sequence {
     fn new() -> Sequence {
         let mut steps = SmallVec::<[Option<Note>; 64]>::new();
         steps.resize(16, None);
-        Sequence { steps }
+        Sequence { steps, begin: 0, end: 15 }
     }
     fn resize(&mut self, new_size: usize) {
         self.steps.resize(new_size, None);
+        if self.end > new_size - 1 {
+            self.end = new_size - 1;
+        }
+        if self.begin > new_size - 1 {
+            self.begin = 0;
+        }
     }
-    fn press(&mut self, x: usize, note: Note) {}
+    fn press(&mut self, x: usize, note: Note) {
+      self.steps[x] = Some(note);
+    }
+    fn sequence(&self) -> &SmallVec<[Option<Note>; 64]> {
+      &self.steps
+    }
+}
+
+/// Handle a grid much larger than a monome 128, and allow inputing and displaying on a monome 128,
+/// and scrolling through bars (left/right) and notes (up/down). It is aware of the scale it's
+/// representing.
+struct VirtualGrid {
+    width: usize,
+    height: usize,
+    offset_x: usize,
+    offset_y: usize,
+    scale: Scale,
+    grid: SmallVec<[u8; MAX_STEPS * MAX_NOTES]>,
+}
+
+impl VirtualGrid {
+    fn new(width: usize, height: usize) {
+         // pick a scale when starting? random?
+         let mut grid = SmallVec::<[Option<Note>; MAX_STEPS * MAX_NOTES]>::new();
+         // grid.resize(8 * )
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use Pitch;
-
     #[test]
-    fn it_works() {
-        let notes = ["a4", "A4", "C-1", "Cb1", "F#3", "B♮1"];
-        let midi = [69, 69, 0, 23, 54, 35];
-        let Hz = [440., 440., 8.1758, 30.868, 185.00, 61.735];
-        for i in 0..notes.len() {
-            let note = Pitch::try_from(notes[i]).unwrap();
-            let note_from_midi = Pitch::from_MIDI_note(midi[i]);
-            println!(
-                "{} {} {} {} {}",
-                note,
-                note.to_MIDI(),
-                note.to_CV(),
-                note.to_Hz(),
-                note_from_midi
-            );
-            assert!(note == note_from_midi);
-            assert!(note.to_MIDI() == midi[i]);
-            assert!((note.to_Hz() - Hz[i]).abs() < 0.01);
-        }
-        let bad_notes = ["i4", "4a", "C&1", "asdasdasd", "#A4", "♮♮♮"];
-        for i in 0..notes.len() {
-            assert!(Pitch::try_from(bad_notes[i]).is_err());
-        }
-    }
+    fn it_works() { }
 }
