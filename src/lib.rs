@@ -21,7 +21,7 @@ use monome::{KeyDirection, MonomeEvent};
 use smallvec::SmallVec;
 
 /// Maximum number of steps in the sequencer, in sixteenth.
-const MAX_STEPS: usize = 64;
+const MAX_STEPS: usize = 128;
 /// Initial number of steps in the sequencer, in sixteenth.
 const INITIAL_STEPS: usize = 32;
 /// Number of notes that can be represented, in semitones.
@@ -283,6 +283,7 @@ enum MMMSAction {
     Nothing,
     Tick((usize, usize)),
     Move((isize, isize)),
+    Resize(usize), // number is the number of bars
 }
 
 struct GridStateTracker {
@@ -300,31 +301,60 @@ impl GridStateTracker {
         }
     }
 
+    fn shift_down(&self) -> bool {
+      self.buttons[Self::idx(self.width, 15, 0)] != MMMSIntent::Nothing
+    }
+
     fn down(&mut self, x: usize, y: usize) {
         if y == 0 {
-            // control row, rightmost part, does nothing for now.
-            self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
+            // control row, rightmost part, does nothing for now, the last one is shift
+            if x == 15 {
+                self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Tick;
+            } else {
+                self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
+            }
         } else {
             self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Tick;
         }
     }
     fn up(&mut self, x: usize, y: usize) -> MMMSAction {
+        self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
         if y == 0 {
-            match x {
-                8 => {
-                    return MMMSAction::Move((-16, 0))
+            if !self.shift_down() {
+                match x {
+                    8 => {
+                        return MMMSAction::Move((-16, 0))
+                    }
+                    9 => {
+                        return MMMSAction::Move((16, 0))
+                    }
+                    10 => {
+                        return MMMSAction::Move((0, -1))
+                    }
+                    11 => {
+                        return MMMSAction::Move((0, 1))
+                    }
+                    _ => {
+                        return MMMSAction::Nothing
+                    }
                 }
-                9 => {
-                    return MMMSAction::Move((16, 0))
-                }
-                10 => {
-                    return MMMSAction::Move((0, -1))
-                }
-                11 => {
-                    return MMMSAction::Move((0, 1))
-                }
-                _ => {
-                    return MMMSAction::Nothing
+            } else {
+                match x {
+                    8 => {
+                        return MMMSAction::Resize(1)
+                    }
+                    9 => {
+                        return MMMSAction::Resize(2)
+                    }
+                    10 => {
+                        return MMMSAction::Resize(4)
+                    }
+                    11 => {
+                        return MMMSAction::Resize(8)
+                    }
+                    _ => {
+                        return MMMSAction::Nothing
+                    }
                 }
             }
         } else {
@@ -356,10 +386,15 @@ impl InstrumentControl for MMMS {
         self.virtual_grid.viewport(&mut grid[16..]);
         self.virtual_grid.draw();
 
-        // draw octave indicator
-        let current_octave = self.virtual_grid.current_octave();
-        if current_octave != 0 {
-            grid[7 + current_octave] = 15;
+        // draw octave indicator if shift is not pressed. Otherwise, draw the amount of bars
+        if !self.state_tracker.shift_down() {
+            let current_octave = self.virtual_grid.current_octave();
+            grid[8 + current_octave] = 15;
+        } else {
+            let bars = self.virtual_grid.steps_count() / 16;
+            for i in 0..bars {
+                grid[8 + i] = 15;
+            }
         }
 
         // draw playhead if visible
@@ -389,6 +424,10 @@ impl InstrumentControl for MMMS {
                     }
                     MMMSAction::Move((x, y)) => {
                         self.virtual_grid.mouve(x, y);
+                    }
+                    MMMSAction::Resize(bars) => {
+                        self.virtual_grid.change_steps_count(bars * 16);
+                        self.sender.send(Message::Resize(bars * 16));
                     }
                     _ => {
                         println!("nothing");
@@ -440,6 +479,7 @@ impl VirtualGrid {
       assert!(count % 16 == 0);
       self.width = count;
       self.offset_x = clamp((self.offset_x as isize) as isize, 0 as isize, (self.width - 16) as isize) as usize;
+      self.grid.resize(count, None);
     }
     fn mouve(&mut self, x: isize, y: isize) {
         self.offset_x = clamp((self.offset_x as isize + x as isize) as isize, 0 as isize, (self.width - 16) as isize) as usize;
@@ -456,7 +496,7 @@ impl VirtualGrid {
     }
     // return a number between 0 and 8 that represents the octave currently in the view
     fn current_octave(&self) -> usize {
-        clamp((self.scale.note_count() - (self.offset_y + 7)) / self.scale.octave_note_count(), 0, 8);
+        clamp((self.scale.note_count() - (self.offset_y + 7)) / self.scale.octave_note_count(), 0, 8)
     }
     fn in_view(&self, x: usize, y: usize) -> bool {
         y >= self.offset_y && y < self.offset_y + 7 &&
