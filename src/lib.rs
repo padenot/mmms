@@ -44,6 +44,7 @@ enum Message {
     Tick((usize, usize)),
     Scale(Scale),
     Resize(usize),
+    Clear,
     Start,
     Stop,
     TempoChange(f32),
@@ -101,6 +102,11 @@ impl MMMSRenderer {
     fn resize(&mut self, new_size: usize) {
         self.steps.resize(new_size, None);
     }
+    fn clear(&mut self) {
+        for i in self.steps.iter_mut() {
+            *i = None;
+        }
+    }
     fn print_seq(&self) {
         for step in self.steps.iter() {
             if step.is_some() {
@@ -124,6 +130,9 @@ impl InstrumentRenderer for MMMSRenderer {
                 Message::Stop => {}
                 Message::Resize(new_size) => {
                     self.resize(new_size)
+                }
+                Message::Clear => {
+                    self.clear();
                 }
                 Message::TempoChange(tempo) => {
                     self.set_tempo(tempo);
@@ -283,6 +292,7 @@ enum MMMSAction {
     Nothing,
     Tick((usize, usize)),
     Move((isize, isize)),
+    Clear,
     Resize(usize), // number is the number of bars
 }
 
@@ -318,8 +328,8 @@ impl GridStateTracker {
         }
     }
     fn up(&mut self, x: usize, y: usize) -> MMMSAction {
-        self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
         if y == 0 {
+            self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
             if !self.shift_down() {
                 match x {
                     8 => {
@@ -358,13 +368,17 @@ impl GridStateTracker {
                 }
             }
         } else {
-            match self.buttons[Self::idx(self.width, x, y)].clone() {
+            let but = self.buttons[Self::idx(self.width, x, y)].clone();
+            self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
+            match but {
                 MMMSIntent::Nothing => {
                     // !? pressed a key during startup
                     MMMSAction::Nothing
                 }
                 MMMSIntent::Tick => {
-                    self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
+                    if self.shift_down() && x == 0 && y == 7 {
+                        return MMMSAction::Clear;
+                    }
                     MMMSAction::Tick((x, y - 1))
                 }
             }
@@ -429,6 +443,10 @@ impl InstrumentControl for MMMS {
                         self.virtual_grid.change_steps_count(bars * 16);
                         self.sender.send(Message::Resize(bars * 16));
                     }
+                    MMMSAction::Clear => {
+                        self.virtual_grid.clear();
+                        self.sender.send(Message::Clear);
+                    }
                     _ => {
                         println!("nothing");
                     }
@@ -484,6 +502,11 @@ impl VirtualGrid {
     fn mouve(&mut self, x: isize, y: isize) {
         self.offset_x = clamp((self.offset_x as isize + x as isize) as isize, 0 as isize, (self.width - 16) as isize) as usize;
         self.offset_y = clamp((self.offset_y as isize + y as isize) as isize, 0 as isize, (self.height - 7) as isize) as usize;
+    }
+    fn clear(&mut self) {
+        for i in self.grid.iter_mut() {
+            *i = None;
+        }
     }
     fn vaddress(&self, vx: usize, vy: usize) -> (usize, usize) {
         let x = vx + self.offset_x;
