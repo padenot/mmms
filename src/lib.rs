@@ -356,6 +356,12 @@ impl InstrumentControl for MMMS {
         self.virtual_grid.viewport(&mut grid[16..]);
         self.virtual_grid.draw();
 
+        // draw octave indicator
+        let current_octave = self.virtual_grid.current_octave();
+        if current_octave != 0 {
+            grid[7 + current_octave] = 15;
+        }
+
         // draw playhead if visible
         if self.virtual_grid.x_in_view(pos_in_pattern) {
             for i in 1..self.height + 1 {
@@ -447,6 +453,10 @@ impl VirtualGrid {
         assert!(y < self.height);
 
         (x, y)
+    }
+    // return a number between 0 and 8 that represents the octave currently in the view
+    fn current_octave(&self) -> usize {
+        clamp((self.scale.note_count() - (self.offset_y + 7)) / self.scale.octave_note_count(), 0, 8);
     }
     fn in_view(&self, x: usize, y: usize) -> bool {
         y >= self.offset_y && y < self.offset_y + 7 &&
