@@ -74,7 +74,7 @@ impl MMMSRenderer {
     ) -> MMMSRenderer {
         let mut steps = SmallVec::<[Option<Pitch>; 64]>::new();
         steps.resize(INITIAL_STEPS, None);
-        let scale = Scale::new(PitchClass::B, Accidental::Natural, ScaleType::MinorPentatonic);
+        let scale = Scale::new(PitchClass::B, ScaleType::Minor);
         MMMSRenderer {
             receiver,
             clock_updater,
@@ -230,6 +230,7 @@ pub struct MMMS {
     audio_clock: ClockConsumer,
     state_tracker: GridStateTracker,
     virtual_grid: VirtualGrid,
+    picking_scale: bool
 }
 
 impl MMMS {
@@ -275,9 +276,56 @@ impl MMMS {
                 audio_clock: clock_consumer,
                 state_tracker,
                 virtual_grid,
+                picking_scale: false
             },
             renderer,
         )
+    }
+    fn scale_picker(&self, current_scale: Scale, grid: &mut [u8]) {
+        assert!(grid.len() == 7 * 16);
+        let mut pitch = PitchClass::C;
+        // fundamental picker
+        for i in 0..3 {
+            for j in 0..4 {
+                grid[i * 16 + j] = if pitch == current_scale.fundamental() { 15 } else { 8 };
+                pitch = pitch.fifth();
+            }
+        }
+
+        // Scale picker
+        let scales : [ScaleType; 7] = [
+            ScaleType::Chromatic,
+            ScaleType::Major,
+            ScaleType::Minor,
+            ScaleType::MinorMelodic,
+            ScaleType::MinorHarmonic,
+            ScaleType::MajorPentatonic,
+            ScaleType::MinorPentatonic,
+        ];
+
+        // 4 + 1 of padding for the fundamental picker
+        let mut h_offset = 5;
+        let mut itv = SmallVec::<[u8; 12]>::new();
+        for scale in scales.iter() {
+            Scale::type_to_intervals(scale, &mut itv);
+            // draw it on the right hand side. Only the seven first notes.
+            let note_count_clamped = clamp(itv.len(), 0, 7);
+            for i in 0..note_count_clamped {
+                let steps2luminosity = [
+                    5, // 1 semitone
+                    9, // 2 semitones
+                    11, // 3 semitones
+                    13 // 4 semitonees
+                ];
+                let lum_modifier = if *scale == current_scale.scale_type() {
+                    2
+                } else {
+                    0
+                };
+                grid[i * 16 + h_offset] = lum_modifier + steps2luminosity[(itv[i] - 1) as usize];
+            }
+            h_offset += 1;
+        }
     }
 }
 
@@ -293,6 +341,7 @@ enum MMMSAction {
     Tick((usize, usize)),
     Move((isize, isize)),
     Clear,
+    ToggleScale,
     Resize(usize), // number is the number of bars
 }
 
@@ -314,11 +363,15 @@ impl GridStateTracker {
     fn shift_down(&self) -> bool {
       self.buttons[Self::idx(self.width, 15, 0)] != MMMSIntent::Nothing
     }
+    fn scale_down(&self) -> bool {
+      self.buttons[Self::idx(self.width, 14, 0)] != MMMSIntent::Nothing
+    }
 
     fn down(&mut self, x: usize, y: usize) {
         if y == 0 {
-            // control row, rightmost part, does nothing for now, the last one is shift
-            if x == 15 {
+            // control row, rightmost part, does nothing for now, the last one is shift, and the
+            // one before that is the scale change button
+            if x == 15 || x == 14 {
                 self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Tick;
             } else {
                 self.buttons[Self::idx(self.width, x, y)] = MMMSIntent::Nothing;
@@ -343,6 +396,9 @@ impl GridStateTracker {
                     }
                     11 => {
                         return MMMSAction::Move((0, 1))
+                    }
+                    14 => {
+                        return MMMSAction::ToggleScale
                     }
                     _ => {
                         return MMMSAction::Nothing
@@ -387,6 +443,7 @@ impl GridStateTracker {
     fn idx(width: usize, x: usize, y: usize) -> usize {
         y * width + x
     }
+
 }
 
 impl InstrumentControl for MMMS {
@@ -397,29 +454,34 @@ impl InstrumentControl for MMMS {
 
         grid.iter_mut().map(|x| *x = 0).count();
 
-        self.virtual_grid.viewport(&mut grid[16..]);
-        self.virtual_grid.draw();
+        if !self.picking_scale {
+            self.virtual_grid.viewport(&mut grid[16..]);
 
-        // draw octave indicator if shift is not pressed. Otherwise, draw the amount of bars
-        if !self.state_tracker.shift_down() {
-            let current_octave = self.virtual_grid.current_octave();
-            grid[8 + current_octave] = 15;
-        } else {
-            let bars = self.virtual_grid.steps_count() / 16;
-            for i in 0..bars {
-                grid[8 + i] = 15;
-            }
-        }
-
-        // draw playhead if visible
-        if self.virtual_grid.x_in_view(pos_in_pattern) {
-            for i in 1..self.height + 1 {
-                let idx = i * 16 + pos_in_pattern % 16;
-                if grid[idx] < 4 {
-                    grid[idx] = 4;
+            // draw octave indicator if shift is not pressed. Otherwise, draw the amount of bars
+            if !self.state_tracker.shift_down() {
+                let current_octave = self.virtual_grid.current_octave();
+                grid[8 + current_octave] = 15;
+            } else {
+                let bars = self.virtual_grid.steps_count() / 16;
+                for i in 0..bars {
+                    grid[8 + i] = 15;
                 }
             }
+
+            // draw playhead if visible
+            if self.virtual_grid.x_in_view(pos_in_pattern) {
+                for i in 1..self.height + 1 {
+                    let idx = i * 16 + pos_in_pattern % 16;
+                    if grid[idx] < 4 {
+                        grid[idx] = 4;
+                    }
+                }
+            }
+        } else {
+            self.scale_picker(self.virtual_grid.current_scale(), &mut grid[16..]);
         }
+
+        self.virtual_grid.draw();
     }
     fn main_thread_work(&mut self) {
         // noop
@@ -446,6 +508,9 @@ impl InstrumentControl for MMMS {
                     MMMSAction::Clear => {
                         self.virtual_grid.clear();
                         self.sender.send(Message::Clear);
+                    }
+                    MMMSAction::ToggleScale => {
+                        self.picking_scale = !self.picking_scale;
                     }
                     _ => {
                         println!("nothing");
@@ -477,7 +542,7 @@ impl VirtualGrid {
          // are ticked (or none if it's not been ticked).
          let mut grid = SmallVec::<[Option<u8>; MAX_STEPS]>::new();
          // TODO: pick a scale when starting? random?
-         let scale = Scale::new(PitchClass::B, Accidental::Natural, ScaleType::MinorPentatonic);
+         let scale = Scale::new(PitchClass::B, ScaleType::Minor);
          // third octave
          let start_offset = scale.note_count() - scale.octave_note_count() * 3 - 7;
          grid.resize(INITIAL_STEPS, None);
@@ -520,6 +585,9 @@ impl VirtualGrid {
     // return a number between 0 and 8 that represents the octave currently in the view
     fn current_octave(&self) -> usize {
         clamp((self.scale.note_count() - (self.offset_y + 7)) / self.scale.octave_note_count(), 0, 8)
+    }
+    fn current_scale(&self) -> Scale {
+        self.scale.clone()
     }
     fn in_view(&self, x: usize, y: usize) -> bool {
         y >= self.offset_y && y < self.offset_y + 7 &&
